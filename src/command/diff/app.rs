@@ -69,12 +69,14 @@ fn navigate_stacked_commit(
     if new_index >= state.stacked_commits.len() {
         return false;
     }
+    state.save_comment_history();
     state.save_stacked_viewed_files();
     state.current_commit_index = new_index;
     if let Some(commit) = state.stacked_commits.get(new_index) {
         let file_diffs = load_single_commit_diffs(&commit.commit_id, &options.file, backend);
         state.reload(file_diffs, None);
         state.load_stacked_viewed_files();
+        state.load_comment_history();
         true
     } else {
         false
@@ -327,6 +329,11 @@ fn run_app_internal(
         state.init_stacked_mode(commits);
     }
 
+    if let Ok(cwd) = std::env::current_dir() {
+        state.set_comment_history_path(super::comment_history::discover(&cwd));
+        state.load_comment_history();
+    }
+
     // Load viewed files from GitHub on startup in PR mode (before TUI starts)
     if let Some(ref pr) = pr_info {
         let mut spinner = Spinner::new(
@@ -372,6 +379,7 @@ fn run_app_internal(
     let mut pending_watch_event: Option<WatchEvent> = None;
     let mut pending_events: VecDeque<Event> = VecDeque::new();
     let mut copy_annotations_on_exit = false;
+    let mut confirm_quit = false;
 
     'main: loop {
         if let Some(ref rx) = watch_rx {
@@ -402,6 +410,7 @@ fn run_app_internal(
             // Pass changed files to reload so it can unmark them from viewed
             let changed_files = pending_watch_event.take().map(|e| e.changed_files);
             state.reload(file_diffs, changed_files.as_ref());
+            state.save_comment_history();
 
             // Re-sync viewed files from GitHub in PR mode
             if let Some(ref pr) = pr_info {
@@ -807,6 +816,9 @@ fn run_app_internal(
                                     }
                                 }
                                 ModalResult::Confirmed => {
+                                    if confirm_quit {
+                                        break 'main;
+                                    }
                                     copy_annotations_on_exit = true;
                                     break 'main;
                                 }
@@ -843,6 +855,7 @@ fn run_app_internal(
                                     active_modal = None;
                                 }
                                 ModalResult::Dismissed | ModalResult::Selected(_, _) => {
+                                    confirm_quit = false;
                                     active_modal = None;
                                 }
                             }
@@ -1258,7 +1271,17 @@ fn run_app_internal(
                             state.search_state.clear();
                             state.mark_search_dirty();
                         }
-                        KeyCode::Char('q') | KeyCode::Esc => break 'main,
+                        KeyCode::Esc | KeyCode::Char('q') => {
+                            confirm_quit = true;
+                            let warning = if state.persists_comments() {
+                                "Exit lumen?\n\nComments stay saved for this diff.\nPress enter to quit."
+                            } else if state.annotations.is_empty() {
+                                "Exit lumen?\n\nPress enter to quit."
+                            } else {
+                                "Exit lumen?\n\nAnnotations in this review will be lost.\nPress enter to quit."
+                            };
+                            active_modal = Some(Modal::confirm("Exit", warning));
+                        }
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             break 'main
                         }
@@ -1424,6 +1447,33 @@ fn run_app_internal(
                                     max_scroll,
                                 );
                             }
+                        }
+                        KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down
+                            if state.keyboard_selecting
+                                && state.focused_panel == FocusedPanel::DiffView =>
+                        {
+                            let extend = matches!(key.code, KeyCode::Char('J'))
+                                || key.modifiers.contains(KeyModifiers::SHIFT);
+                            state.move_keyboard_line_selection(
+                                1,
+                                extend,
+                                visible_height,
+                                max_scroll,
+                            );
+                        }
+                        KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up
+                            if state.keyboard_selecting
+                                && state.focused_panel == FocusedPanel::DiffView
+                                && !(key.code == KeyCode::Up && state.search_state.has_query()) =>
+                        {
+                            let extend = matches!(key.code, KeyCode::Char('K'))
+                                || key.modifiers.contains(KeyModifiers::SHIFT);
+                            state.move_keyboard_line_selection(
+                                -1,
+                                extend,
+                                visible_height,
+                                max_scroll,
+                            );
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
                             if state.focused_panel == FocusedPanel::Sidebar {
@@ -1748,6 +1798,12 @@ fn run_app_internal(
                                 }
                             }
                         }
+                        KeyCode::Char('v')
+                            if state.focused_panel == FocusedPanel::DiffView
+                                && !state.file_diffs.is_empty() =>
+                        {
+                            state.begin_keyboard_line_selection();
+                        }
                         KeyCode::Char('i') => {
                             if !state.file_diffs.is_empty() {
                                 let file_index = state.current_file;
@@ -1792,6 +1848,26 @@ fn run_app_internal(
                                         annotation_editor = Some(editor);
                                     }
                                     state.clear_selection();
+                                } else if diff.old_content.is_empty() && !diff.new_content.is_empty()
+                                {
+                                    // A new file is one hunk, so the hunk target would
+                                    // cover every line and drop the editor at the bottom.
+                                    // Comment the line at the top of the viewport instead.
+                                    state.ensure_cache();
+                                    let sbs = state.side_by_side_ref();
+                                    let start = (state.scroll as usize).min(sbs.len().saturating_sub(1));
+                                    if let Some(line_no) = sbs
+                                        .iter()
+                                        .skip(start)
+                                        .find_map(|dl| dl.line_number(DiffPanelFocus::New))
+                                    {
+                                        let target = super::state::AnnotationTarget::LineRange {
+                                            panel: DiffPanelFocus::New,
+                                            start_line: line_no,
+                                            end_line: line_no,
+                                        };
+                                        annotation_editor = Some(AnnotationEditor::new(filename, target));
+                                    }
                                 } else if let Some(hunk_index) = state.focused_hunk {
                                     // Tier 2: Focused hunk → line-range annotation for the hunk
                                     let is_deleted =
@@ -1873,6 +1949,7 @@ fn run_app_internal(
                                      Paste them into Teams or anywhere else.",
                                     n, noun,
                                 );
+                                confirm_quit = false;
                                 active_modal = Some(Modal::confirm("Copy annotations", msg));
                             }
                         }
@@ -2027,7 +2104,7 @@ fn run_app_internal(
                                         bindings: vec![
                                             KeyBind {
                                                 key: "q / esc",
-                                                description: "Quit",
+                                                description: "Ask before quitting (enter confirms)",
                                             },
                                             KeyBind {
                                                 key: "tab",
@@ -2175,6 +2252,10 @@ fn run_app_internal(
                                         title: "Selection & Annotations",
                                         bindings: vec![
                                             KeyBind {
+                                                key: "v",
+                                                description: "Select top line (j/k move, J/K extend)",
+                                            },
+                                            KeyBind {
                                                 key: "y",
                                                 description: "Copy selection (or filename)",
                                             },
@@ -2210,6 +2291,8 @@ fn run_app_internal(
         LeaveAlternateScreen
     )?;
     disable_raw_mode()?;
+
+    state.save_comment_history();
 
     if copy_annotations_on_exit {
         let formatted = state.format_annotations_for_export();

@@ -1,5 +1,6 @@
 mod annotation;
 mod app;
+mod comment_history;
 mod context;
 mod coordinates;
 mod diff_algo;

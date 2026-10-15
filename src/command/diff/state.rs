@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use tree_sitter::{Parser, Tree};
@@ -185,6 +186,8 @@ pub struct AppState {
     pub vcs_name: &'static str,
     /// The commit reference used to open the diff (e.g., "HEAD~2..HEAD", "main..feature")
     pub diff_reference: Option<String>,
+    /// `.git/lumen/comments.json` (or the jj equivalent) for this repository.
+    comment_history_path: Option<PathBuf>,
     // Selection state
     /// Which panel has selection focus
     pub diff_panel_focus: DiffPanelFocus,
@@ -192,6 +195,8 @@ pub struct AppState {
     pub selection: Selection,
     /// Whether a mouse drag is in progress
     pub is_dragging: bool,
+    /// Line selection started from the keyboard (`v`), moved with `j`/`k`.
+    pub keyboard_selecting: bool,
     /// Whether to show the selection action tooltip
     pub show_selection_tooltip: bool,
     // Cached diff computation
@@ -314,9 +319,11 @@ impl AppState {
             stacked_viewed_files: HashMap::new(),
             vcs_name: "git", // Default, will be set by caller
             diff_reference: None,
+            comment_history_path: None,
             diff_panel_focus: DiffPanelFocus::default(),
             selection: Selection::default(),
             is_dragging: false,
+            keyboard_selecting: false,
             show_selection_tooltip: false,
             cached_side_by_side: None,
             cached_hunks: None,
@@ -571,11 +578,80 @@ impl AppState {
         self.diff_panel_focus = DiffPanelFocus::None;
         self.selection = Selection::default();
         self.is_dragging = false;
+        self.keyboard_selecting = false;
         self.show_selection_tooltip = false;
+    }
+
+    /// Panel used when a keyboard line selection has not chosen a side.
+    /// Deleted files and the old-only layout use the left panel.
+    fn keyboard_annotation_panel(&self) -> DiffPanelFocus {
+        if self.diff_fullscreen == DiffFullscreen::OldOnly {
+            return DiffPanelFocus::Old;
+        }
+        if self.diff_fullscreen == DiffFullscreen::NewOnly {
+            return DiffPanelFocus::New;
+        }
+        let deleted = self
+            .file_diffs
+            .get(self.current_file)
+            .is_some_and(|diff| !diff.old_content.is_empty() && diff.new_content.is_empty());
+        if deleted {
+            DiffPanelFocus::Old
+        } else {
+            DiffPanelFocus::New
+        }
+    }
+
+    /// Select the top visible line so `j`/`k` can move it and `i` can annotate it.
+    pub fn begin_keyboard_line_selection(&mut self) {
+        self.ensure_cache();
+        let len = self.side_by_side_ref().len();
+        if len == 0 {
+            return;
+        }
+        let line = (self.scroll as usize).min(len - 1);
+        let panel = self.keyboard_annotation_panel();
+        self.diff_panel_focus = panel;
+        self.selection = Selection {
+            panel,
+            anchor: CursorPosition { line, column: 0 },
+            head: CursorPosition { line, column: 0 },
+            mode: SelectionMode::Line,
+        };
+        self.is_dragging = false;
+        self.keyboard_selecting = true;
+        self.show_selection_tooltip = false;
+    }
+
+    /// Move the keyboard line selection. Without `extend`, the selection stays one line.
+    pub fn move_keyboard_line_selection(
+        &mut self,
+        delta: isize,
+        extend: bool,
+        visible_height: usize,
+        max_scroll: usize,
+    ) {
+        if !self.keyboard_selecting || self.selection.mode != SelectionMode::Line {
+            return;
+        }
+        self.ensure_cache();
+        let len = self.side_by_side_ref().len();
+        if len == 0 {
+            return;
+        }
+        let next = (self.selection.head.line as isize + delta).clamp(0, (len - 1) as isize) as usize;
+        if !extend {
+            self.selection.anchor.line = next;
+            self.selection.anchor.column = 0;
+        }
+        self.selection.head.line = next;
+        self.selection.head.column = 0;
+        self.scroll = adjust_scroll_to_line(next, self.scroll, visible_height, max_scroll);
     }
 
     /// Start a new selection
     pub fn start_selection(&mut self, panel: DiffPanelFocus, pos: CursorPosition, mode: SelectionMode) {
+        self.keyboard_selecting = false;
         self.diff_panel_focus = panel;
         self.selection = Selection {
             panel,
@@ -721,6 +797,56 @@ impl AppState {
     /// Set the diff reference string (e.g., "HEAD~2..HEAD")
     pub fn set_diff_reference(&mut self, reference: Option<String>) {
         self.diff_reference = reference;
+    }
+
+    pub fn set_comment_history_path(&mut self, path: Option<PathBuf>) {
+        self.comment_history_path = path;
+    }
+
+    pub fn persists_comments(&self) -> bool {
+        self.comment_history_path.is_some()
+    }
+
+    fn comment_history_key(&self) -> String {
+        super::comment_history::review_key(
+            self.diff_reference.as_deref(),
+            self.current_commit().map(|commit| commit.commit_id.as_str()),
+        )
+    }
+
+    fn open_annotation_files(&self) -> HashSet<String> {
+        self.file_diffs
+            .iter()
+            .map(|diff| diff.filename.clone())
+            .collect()
+    }
+
+    /// Load comments saved for this diff. Notes on files that are not in the
+    /// current diff stay on disk and are not shown.
+    pub fn load_comment_history(&mut self) {
+        let Some(path) = self.comment_history_path.clone() else {
+            return;
+        };
+        let key = self.comment_history_key();
+        let open_files = self.open_annotation_files();
+        let mut annotations = super::comment_history::load(&path, &key);
+        annotations.retain(|annotation| open_files.contains(&annotation.filename));
+        for (index, annotation) in annotations.iter_mut().enumerate() {
+            annotation.id = index as u64;
+        }
+        self.annotation_next_id = annotations.len() as u64;
+        self.annotations = annotations;
+    }
+
+    /// Write the comments for this diff. Failures are ignored so the review
+    /// session keeps going if the disk is unavailable.
+    pub fn save_comment_history(&self) {
+        let Some(path) = &self.comment_history_path else {
+            return;
+        };
+        let key = self.comment_history_key();
+        let open_files = self.open_annotation_files();
+        let _ = super::comment_history::save(path, &key, &self.annotations, &open_files);
     }
 
     /// Initialize stacked mode with commits
@@ -889,6 +1015,7 @@ impl AppState {
             content,
             created_at,
         });
+        self.save_comment_history();
         id
     }
 
@@ -896,12 +1023,19 @@ impl AppState {
     pub fn update_annotation(&mut self, id: u64, content: String) {
         if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == id) {
             ann.content = content;
+        } else {
+            return;
         }
+        self.save_comment_history();
     }
 
     /// Remove an annotation by id
     pub fn remove_annotation(&mut self, id: u64) {
+        let before = self.annotations.len();
         self.annotations.retain(|a| a.id != id);
+        if self.annotations.len() != before {
+            self.save_comment_history();
+        }
     }
 
     /// Format all annotations for export (GitHub PR review comment style).
@@ -1067,6 +1201,36 @@ mod tests {
         } else {
             panic!("sidebar_selected should point to a file");
         }
+    }
+
+    #[test]
+    fn test_keyboard_line_selection_moves_one_line_and_can_extend() {
+        let diffs = vec![FileDiff {
+            filename: "app.rb".to_string(),
+            old_content: String::new(),
+            new_content: "one\ntwo\nthree\nfour\n".to_string(),
+            status: FileStatus::Added,
+            is_binary: false,
+        }];
+        let mut state = AppState::new(diffs, None);
+        state.scroll = 0;
+        state.begin_keyboard_line_selection();
+
+        assert_eq!(state.selection.anchor.line, 0);
+        assert_eq!(state.selection.head.line, 0);
+        assert_eq!(state.selection.panel, DiffPanelFocus::New);
+
+        state.move_keyboard_line_selection(2, false, 40, 0);
+        assert_eq!(state.selection.anchor.line, 2);
+        assert_eq!(state.selection.head.line, 2);
+
+        state.move_keyboard_line_selection(1, true, 40, 0);
+        assert_eq!(state.selection.anchor.line, 2);
+        assert_eq!(state.selection.head.line, 3);
+
+        state.clear_selection();
+        state.move_keyboard_line_selection(1, false, 40, 0);
+        assert!(!state.selection.is_active());
     }
 
     #[test]

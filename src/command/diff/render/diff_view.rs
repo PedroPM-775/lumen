@@ -1495,6 +1495,11 @@ pub fn render_diff(
             let new_selection_range =
                 get_selection_range_for_line(line_idx, DiffPanelFocus::New, selection);
             let in_annotation = is_in_ann_range(line_idx, None, &ann_index_ranges);
+            let in_focused = {
+                let h_idx = hunks.iter().rposition(|&h| h <= line_idx);
+                !matches!(diff_line.change_type, ChangeType::Equal)
+                    && h_idx.is_some_and(|idx| focused_hunk == Some(idx))
+            };
             let new_line_selected =
                 new_selection_range.map_or(false, |(s, e)| s == 0 && e == usize::MAX);
             let hunk_viewed = {
@@ -1506,7 +1511,7 @@ pub fn render_diff(
             if let Some((num, text)) = &diff_line.new_line {
                 let mut spans: Vec<Span> = Vec::new();
                 spans.push(make_indicator_span(
-                    false,
+                    in_focused,
                     in_annotation,
                     new_line_selected,
                     bg,
@@ -1566,7 +1571,10 @@ pub fn render_diff(
 
         let new_para = Paragraph::new(new_lines).scroll((0, h_scroll)).block(
             Block::default()
-                .title(Line::styled(" [2] New File ", title_style))
+                .title(Line::styled(
+                    format!(" [2] {} ", diff.filename),
+                    title_style,
+                ))
                 .borders(Borders::ALL)
                 .border_style(border_style),
         );

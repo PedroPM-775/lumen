@@ -149,14 +149,14 @@ Priority: CLI flag > config file > `LUMEN_THEME` env var > OS auto-detect.
 
 #### Selection & Annotations
 
-**Selection**: Click-drag in the content area for character-level selection, or on line numbers for line-level selection. Selected text can be copied or annotated.
+**Selection**: Click-drag in the content area for character-level selection, or on line numbers for line-level selection. From the keyboard, `v` selects the top visible line; `j`/`k` move that line and `J`/`K` extend the range. `esc` clears it. Selected text can be copied or annotated.
 
 **Annotations**: Add review comments at three levels of granularity:
-- **Selection** — select lines with mouse, press `i` to annotate the selected range
-- **Hunk** — focus a hunk with `{`/`}`, press `i` to annotate the hunk
+- **Selection** — select lines with the mouse or with `v` then `j`/`k`, press `i` to annotate that range
+- **Hunk** — focus a hunk with `{`/`}`, press `i` to annotate the hunk. On a newly added file, `i` comments the line at the top of the screen instead of the whole file
 - **File** — press `i` with no selection or hunk focus to annotate the whole file
 
-Annotated lines display a `▍` gutter indicator. Use `I` to view, edit, delete, copy, or export all annotations.
+Annotated lines display a `▍` gutter indicator. Use `I` to view, edit, delete, copy, or export all annotations. Comments are saved in the repository and come back the next time you open the same diff.
 
 #### Keybindings
 
