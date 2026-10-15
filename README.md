@@ -5,7 +5,7 @@
 A fast terminal diff viewer and code review TUI, written in Rust.
 
 [![Crates.io Total Downloads](https://img.shields.io/crates/d/lumen?label=downloads%20%40crates.io)](https://crates.io/crates/lumen)
-[![GitHub Releases](https://img.shields.io/github/downloads/jnsahaj/lumen/total?label=dowloads%20%40releases)](https://github.com/jnsahaj/lumen/releases)
+[![GitHub Releases](https://img.shields.io/github/downloads/PedroPM-775/lumen/total?label=dowloads%20%40releases)](https://github.com/PedroPM-775/lumen/releases)
 ![GitHub License](https://img.shields.io/github/license/jnsahaj/lumen)
 ![Crates.io Size](https://img.shields.io/crates/size/lumen)
 
@@ -48,19 +48,16 @@ Before you begin, ensure you have:
 
 ### Installation
 
-#### Using Homebrew (MacOS and Linux)
+Download the archive for your machine from the [releases page](https://github.com/PedroPM-775/lumen/releases), extract it, and put the `lumen` binary on your `PATH`.
+
+Linux x86_64:
+
 ```bash
-brew install jnsahaj/lumen/lumen
+curl -L https://github.com/PedroPM-775/lumen/releases/latest/download/lumen-x86_64-unknown-linux-gnu.tar.gz | tar -xz
+install lumen ~/.local/bin/lumen
 ```
 
-#### Using Cargo
-> [!IMPORTANT]
-> `cargo` is a package manager for `rust`,
-> and is installed automatically when you install `rust`.
-> See [installation guide](https://doc.rust-lang.org/cargo/getting-started/installation.html)
-```bash
-cargo install lumen
-```
+Each release also includes `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `x86_64-apple-darwin`, and `aarch64-apple-darwin`.
 
 ## Usage 🔅
 
@@ -172,6 +169,7 @@ Annotated lines display a `▍` gutter indicator. Use `I` to view, edit, delete,
 - `y`: Copy selection (or filename)
 - `i`: Annotate selection / hunk / file
 - `I`: View all annotations
+- `s`: Exit and copy annotations to the clipboard
 - `ctrl+h/l`: Previous/next commit (stacked mode)
 - `?`: Show all keybindings
 
@@ -271,29 +269,19 @@ export LUMEN_AI_MODEL="gpt-5-mini"
 | [OpenRouter](https://openrouter.ai/) `openrouter` | Yes | [see list](https://openrouter.ai/models) (default: `anthropic/claude-sonnet-4.5`) |
 | [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) `vercel` | Yes | [see list](https://vercel.com/docs/ai-gateway/supported-models) (default: `anthropic/claude-sonnet-4.5`) |
 
-## Coding Agent Integrations 🔅
+## Sharing annotations 🔅
 
-Use lumen as the review surface for your coding agent. When the agent finishes a turn, shell-escape to lumen, annotate the diff inline, and press `s` to send your annotations back as the agent's next prompt.
+Annotate a diff, then press `s` to copy those notes to the system clipboard and exit. Paste them into Teams, a chat, or anywhere else.
 
 ```
-agent finishes turn → !lumen diff → annotate → press `s`
-→ stdout returns to the agent → agent fixes your notes
+lumen diff → annotate → press `s` → Enter
+→ annotations are on the clipboard → paste
 ```
 
-The mechanics are just stdin/stdout — no plugins, no extensions:
+- `s` opens a confirmation modal when there is at least one annotation. On `Enter`, lumen exits and copies the formatted annotations (the same text the annotations list copies with `y`).
+- `q` on that modal dismisses it and stays in the diff.
 
-- `s` in the diff TUI opens a confirmation modal. On `Enter`, lumen exits and writes the formatted annotations to stdout (the same text `y` copies to your clipboard).
-- The TUI auto-routes to `/dev/tty` when stdout is captured, so the agent receives clean text — no escape codes.
-
-Works with anything that has a shell-escape:
-
-| Agent | How to trigger |
-|-------|----------------|
-| Claude Code | `!lumen diff` |
-| Codex | `!lumen diff` |
-| Any agent with shell access | `lumen diff` from a tool/bash call |
-
-Annotate with `i` (selection / hunk / file), press `s` → `Enter` to send. Press `q` to dismiss without sending.
+Annotate with `i` (selection / hunk / file), then press `s` → `Enter` to copy and exit.
 
 ## Advanced Configuration 🔅
 

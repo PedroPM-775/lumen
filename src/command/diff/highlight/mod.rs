@@ -35,9 +35,20 @@ pub fn highlight_color(index: usize) -> Color {
     }
 }
 
+fn highlight_key(filename: &str) -> Option<&str> {
+    let path = Path::new(filename);
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        return Some(ext);
+    }
+    match path.file_name().and_then(|name| name.to_str()) {
+        Some("Rakefile" | "rakefile") => Some("rake"),
+        _ => None,
+    }
+}
+
 fn get_config_for_file(filename: &str) -> Option<&'static LanguageConfig> {
-    let ext = Path::new(filename).extension().and_then(|e| e.to_str())?;
-    CONFIGS.iter().find(|(e, _)| *e == ext).map(|(_, c)| c)
+    let key = highlight_key(filename)?;
+    CONFIGS.iter().find(|(e, _)| *e == key).map(|(_, c)| c)
 }
 
 fn highlight_code(code: &str, filename: &str) -> Vec<(String, Option<usize>)> {
@@ -238,6 +249,8 @@ mod tests {
         assert!(extensions.contains(&"json"), "JSON config should be loaded");
         assert!(extensions.contains(&"ex"), "Elixir config should be loaded");
         assert!(extensions.contains(&"exs"), "Elixir script config should be loaded");
+        assert!(extensions.contains(&"rb"), "Ruby config should be loaded");
+        assert!(extensions.contains(&"rake"), "Rake config should be loaded");
         assert!(extensions.contains(&"java"), "Java config should be loaded");
         assert!(extensions.contains(&"zig"), "Zig config should be loaded");
         assert!(extensions.contains(&"c"), "C config should be loaded");
@@ -281,6 +294,17 @@ function hello(): string {
             has_highlights,
             "TypeScript code should have syntax highlights"
         );
+    }
+
+    #[test]
+    fn test_rake_highlighting() {
+        let code = "task :default do\n  puts \"hello\"\nend\n";
+        for filename in ["lib/tasks/app.rake", "Rakefile", "dir/rakefile"] {
+            let result = highlight_code(code, filename);
+            assert!(!result.is_empty(), "{filename} should produce output");
+            let has_highlights = result.iter().any(|(_, h)| h.is_some());
+            assert!(has_highlights, "{filename} should have syntax highlights");
+        }
     }
 
     #[test]

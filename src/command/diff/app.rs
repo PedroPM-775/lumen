@@ -15,9 +15,7 @@ use crossterm::{
 use ratatui::prelude::*;
 
 /// Writer that drives the TUI. Falls back to /dev/tty when stdout is
-/// captured (e.g. when an agent shim does `output=$(lumen diff)`),
-/// so the alternate-screen escapes don't pollute the captured stdout
-/// and we can reserve stdout for the annotation payload (`s` keybind).
+/// captured, so alternate-screen escapes don't pollute a redirected stdout.
 fn open_tui_writer() -> io::Result<Box<dyn Write + Send>> {
     if io::stdout().is_terminal() {
         return Ok(Box::new(io::stdout()));
@@ -373,7 +371,7 @@ fn run_app_internal(
     let mut annotation_editor: Option<AnnotationEditor> = None;
     let mut pending_watch_event: Option<WatchEvent> = None;
     let mut pending_events: VecDeque<Event> = VecDeque::new();
-    let mut send_annotations_on_exit = false;
+    let mut copy_annotations_on_exit = false;
 
     'main: loop {
         if let Some(ref rx) = watch_rx {
@@ -809,7 +807,7 @@ fn run_app_internal(
                                     }
                                 }
                                 ModalResult::Confirmed => {
-                                    send_annotations_on_exit = true;
+                                    copy_annotations_on_exit = true;
                                     break 'main;
                                 }
                                 ModalResult::JumpToLine {
@@ -1871,11 +1869,11 @@ fn run_app_internal(
                                 let n = state.annotations.len();
                                 let noun = if n == 1 { "annotation" } else { "annotations" };
                                 let msg = format!(
-                                    "Exit lumen and write {} {} to stdout?\n\n\
-                                     Use this to pipe feedback back to a coding agent.",
+                                    "Exit lumen and copy {} {} to the clipboard?\n\n\
+                                     Paste them into Teams or anywhere else.",
                                     n, noun,
                                 );
-                                active_modal = Some(Modal::confirm("Send annotations", msg));
+                                active_modal = Some(Modal::confirm("Copy annotations", msg));
                             }
                         }
                         KeyCode::Char('y') => {
@@ -2190,7 +2188,7 @@ fn run_app_internal(
                                             },
                                             KeyBind {
                                                 key: "s",
-                                                description: "Exit & send annotations to stdout",
+                                                description: "Exit & copy annotations to clipboard",
                                             },
                                         ],
                                     },
@@ -2213,12 +2211,13 @@ fn run_app_internal(
     )?;
     disable_raw_mode()?;
 
-    if send_annotations_on_exit {
+    if copy_annotations_on_exit {
         let formatted = state.format_annotations_for_export();
-        let stdout = io::stdout();
-        let mut handle = stdout.lock();
-        handle.write_all(formatted.as_bytes())?;
-        handle.write_all(b"\n")?;
+        let mut clipboard = arboard::Clipboard::new()
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        clipboard
+            .set_text(&formatted)
+            .map_err(|e| io::Error::other(e.to_string()))?;
     }
 
     Ok(())

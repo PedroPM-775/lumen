@@ -202,6 +202,14 @@ pub static CONFIGS: Lazy<Vec<(&'static str, LanguageConfig)>> = Lazy::new(|| {
     );
 
     load_config(
+        tree_sitter_ruby::LANGUAGE.into(),
+        "ruby",
+        RUBY_HIGHLIGHTS,
+        "rake",
+        &mut configs,
+    );
+
+    load_config(
         tree_sitter_elixir::LANGUAGE.into(),
         "elixir",
         ELIXIR_HIGHLIGHTS,
